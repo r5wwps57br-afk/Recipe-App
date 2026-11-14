@@ -11,17 +11,26 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Georgia,serif}
 main{max-width:720px;margin:0 auto;padding:20px 16px 60px}
 h1{font-size:1.8rem;margin:0 0 12px}
-input,button{font:inherit;font-family:system-ui,sans-serif}
-input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+input,textarea,button{font:inherit;font-family:system-ui,sans-serif}
+input,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+textarea{resize:vertical}
 button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:11px 16px;cursor:pointer}
 button.ghost{background:none;color:var(--accent);border:1px solid var(--line)}
-.row{display:flex;gap:8px;margin:8px 0}
+button.small{padding:7px 12px;font-size:.85rem}
+.row{display:flex;gap:8px;margin:8px 0;align-items:center}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
 .list{display:grid;gap:10px;margin-top:14px}
 .item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;cursor:pointer}
 .meta,.msg{color:var(--mute);font-family:system-ui,sans-serif;font-size:.85rem}
+.lbl{display:block;font-family:system-ui,sans-serif;font-size:.8rem;color:var(--mute);margin:14px 0 4px}
 .recipe h2{font-size:1.7rem;margin:10px 0 4px}
 .recipe h3{font-family:system-ui,sans-serif;text-transform:uppercase;letter-spacing:.08em;font-size:.8rem;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:4px;margin:22px 0 8px}
+.recipe h4{font-size:1.05rem;margin:14px 0 4px}
 .recipe li{margin:6px 0}
+ul.ing{list-style:none;padding:0;margin:4px 0}
+.ing label{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.ing input{width:20px;height:20px;margin:3px 0 0;flex:none;accent-color:var(--accent)}
+.ing .have span{color:var(--mute);text-decoration:line-through}
 a{color:var(--accent)}
 </style>
 </head>
@@ -29,50 +38,143 @@ a{color:var(--accent)}
 <main><div id="app"></div></main>
 <script>
 const KEY = 'recipes-v1';
-let recipes = [], view = null, msg = '', busy = false;
+let recipes = [], view = null, edit = false, msg = '', busy = false, onlyNeed = false;
 try { recipes = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) {}
+
+// Upgrade recipes saved by the first version of the app
+function norm(r) {
+  if (!r.ing) r.ing = [{ title: '', items: (r.ingredients || []).map(t => ({ t, have: false })) }];
+  if (!r.meth) r.meth = [{ title: '', items: r.steps || [] }];
+  return r;
+}
+recipes = recipes.map(norm);
+
 const save = () => localStorage.setItem(KEY, JSON.stringify(recipes));
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const app = document.getElementById('app');
+const cur = () => recipes.find(x => x.id === view);
 
 function render() {
-  const r = recipes.find(x => x.id === view);
-  if (r) {
-    app.innerHTML = `<div class="recipe"><button class="ghost" onclick="go(null)">← All recipes</button>
-      <h2>${esc(r.title)}</h2>
-      <div class="meta">${[r.servings && 'Serves ' + esc(r.servings), esc(r.time)].filter(Boolean).join(' · ')}</div>
-      <h3>Ingredients</h3><ul>${r.ingredients.map(i => `<li>${esc(i)}</li>`).join('')}</ul>
-      <h3>Method</h3><ol>${r.steps.map(i => `<li>${esc(i)}</li>`).join('')}</ol>
-      <div class="row"><a href="${esc(r.source)}" target="_blank" rel="noopener">Original source</a>
-      <button class="ghost" style="margin-left:auto" onclick="del('${r.id}')">Delete</button></div></div>`;
-    return;
-  }
+  const r = cur();
+  if (r) return edit ? renderEdit(r) : renderRecipe(r);
+  renderHome();
+}
+
+function renderHome() {
   app.innerHTML = `<h1>🍳 My Recipe Book</h1>
-    <div class="row"><input id="link" type="url" placeholder="Paste a recipe link…"><button id="btn" onclick="add()">${busy ? 'Saving…' : 'Save'}</button></div>
+    <div class="row"><input id="link" type="url" placeholder="Paste a recipe link…"><button onclick="add()">${busy ? 'Saving…' : 'Save'}</button></div>
     <div class="msg">${esc(msg)}</div>
     <input id="q" placeholder="Search saved recipes…" oninput="list()" style="margin-top:12px">
     <div class="list" id="list"></div>`;
   list();
 }
+
 function list() {
   const q = (document.getElementById('q').value || '').toLowerCase();
-  const l = recipes.filter(r => (r.title + r.ingredients.join(' ')).toLowerCase().includes(q));
+  const l = recipes.filter(r => (r.title + ' ' + r.ing.flatMap(g => g.items.map(i => i.t)).join(' ')).toLowerCase().includes(q));
   document.getElementById('list').innerHTML = l.length ? l.map(r =>
     `<div class="item" onclick="go('${r.id}')"><b>${esc(r.title)}</b>
      <div class="meta">${[esc(r.time), r.servings && 'Serves ' + esc(r.servings)].filter(Boolean).join(' · ')}</div></div>`).join('')
     : '<div class="meta" style="text-align:center;padding:24px">No recipes yet. Paste a link above.</div>';
 }
-function go(id) { view = id; render(); scrollTo(0, 0); }
+
+function renderRecipe(r) {
+  const all = r.ing.flatMap(g => g.items), have = all.filter(i => i.have).length;
+  let ing = r.ing.map((g, gi) => {
+    const items = g.items.map((it, ii) => ({ it, ii })).filter(x => !onlyNeed || !x.it.have);
+    if (!items.length) return '';
+    return (g.title ? `<h4>${esc(g.title)}</h4>` : '') + '<ul class="ing">' + items.map(x =>
+      `<li class="${x.it.have ? 'have' : ''}"><label><input type="checkbox" ${x.it.have ? 'checked' : ''} onchange="tick(${gi},${x.ii})"><span>${esc(x.it.t)}</span></label></li>`).join('') + '</ul>';
+  }).join('');
+  if (onlyNeed && !ing) ing = '<p>You have everything 🎉</p>';
+  const meth = r.meth.map(g => (g.title ? `<h4>${esc(g.title)}</h4>` : '') + '<ol>' + g.items.map(s => `<li>${esc(s)}</li>`).join('') + '</ol>').join('');
+  app.innerHTML = `<div class="recipe">
+    <div class="row"><button class="ghost" onclick="go(null)">← All recipes</button><button class="ghost" style="margin-left:auto" onclick="edit=true;render()">Edit</button></div>
+    <h2>${esc(r.title)}</h2>
+    <div class="meta">${[r.servings && 'Serves ' + esc(r.servings), esc(r.time)].filter(Boolean).join(' · ')}</div>
+    <h3>Ingredients</h3>
+    <div class="meta">${have} of ${all.length} ticked (ticked = you have it)</div>
+    <div class="btns">
+      <button class="ghost small" onclick="onlyNeed=!onlyNeed;render()">${onlyNeed ? 'Show all' : 'Show what I need'}</button>
+      <button class="ghost small" onclick="copyList()">Copy shopping list</button>
+      <button class="ghost small" onclick="clearTicks()">Clear ticks</button>
+    </div>
+    <div class="msg">${esc(msg)}</div>
+    ${ing}
+    <h3>Method</h3>${meth}
+    <div class="row" style="margin-top:24px">${/^https?:/.test(r.source || '') ? `<a href="${esc(r.source)}" target="_blank" rel="noopener">Original source</a>` : ''}
+    <button class="ghost small" style="margin-left:auto" onclick="del('${r.id}')">Delete</button></div></div>`;
+}
+
+function renderEdit(r) {
+  const it = toText(r.ing.map(g => ({ title: g.title, items: g.items.map(i => i.t) })));
+  const mt = toText(r.meth);
+  const rows = t => Math.min(22, t.split('\n').length + 2);
+  app.innerHTML = `<h1>Edit recipe</h1>
+    <label class="lbl">Recipe name</label><input id="e-title" value="${esc(r.title)}">
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1"><label class="lbl">Servings</label><input id="e-serv" value="${esc(r.servings)}"></div>
+      <div style="flex:1"><label class="lbl">Time</label><input id="e-time" value="${esc(r.time)}"></div>
+    </div>
+    <label class="lbl">Ingredients: one per line. Start a line with # for a section heading (e.g. # For the sauce)</label>
+    <textarea id="e-ing" rows="${rows(it)}">${esc(it)}</textarea>
+    <label class="lbl">Method: one step per line. Use # for section headings too</label>
+    <textarea id="e-meth" rows="${rows(mt)}">${esc(mt)}</textarea>
+    <div class="btns" style="margin-top:16px"><button onclick="saveEdit()">Save changes</button><button class="ghost" onclick="edit=false;render()">Cancel</button></div>`;
+}
+
+function toText(gs) {
+  return gs.map((g, i) => (g.title || i > 0 ? '# ' + g.title + '\n' : '') + g.items.join('\n')).join('\n').trim();
+}
+function fromText(t) {
+  const gs = [{ title: '', items: [] }];
+  t.split('\n').forEach(l => {
+    l = l.trim(); if (!l) return;
+    const m = /^#+\s*(.*)$/.exec(l);
+    if (m) gs.push({ title: m[1].trim(), items: [] }); else gs[gs.length - 1].items.push(l);
+  });
+  return gs.filter(g => g.items.length);
+}
+function saveEdit() {
+  const r = cur(), v = id => document.getElementById(id).value;
+  const old = new Map(r.ing.flatMap(g => g.items).map(i => [i.t, i.have]));
+  r.title = v('e-title').trim() || r.title;
+  r.servings = v('e-serv').trim(); r.time = v('e-time').trim();
+  r.ing = fromText(v('e-ing')).map(g => ({ title: g.title, items: g.items.map(t => ({ t, have: !!old.get(t) })) }));
+  r.meth = fromText(v('e-meth'));
+  save(); edit = false; msg = 'Saved ✓'; render();
+}
+
+function keepScroll(fn) { const y = scrollY; fn(); scrollTo(0, y); }
+function tick(gi, ii) { const it = cur().ing[gi].items[ii]; it.have = !it.have; save(); keepScroll(render); }
+function clearTicks() { cur().ing.forEach(g => g.items.forEach(i => i.have = false)); save(); keepScroll(render); }
+function copyList() {
+  const r = cur(), lines = [];
+  r.ing.forEach(g => {
+    const need = g.items.filter(i => !i.have); if (!need.length) return;
+    if (g.title) lines.push(g.title + ':');
+    need.forEach(i => lines.push('- ' + i.t));
+  });
+  const text = r.title + ' – shopping list\n' + lines.join('\n');
+  const done = () => { msg = 'Copied ✓'; keepScroll(render); };
+  (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(done).catch(() => prompt('Copy your list:', text));
+}
+function go(id) { view = id; edit = false; onlyNeed = false; msg = ''; render(); scrollTo(0, 0); }
 function del(id) { if (confirm('Delete this recipe?')) { recipes = recipes.filter(r => r.id !== id); save(); go(null); } }
+
 async function add() {
   const url = document.getElementById('link').value.trim();
   if (!url || busy) return;
   busy = true; msg = 'Reading recipe…'; render();
   try {
     const res = await fetch('/.netlify/functions/parse?url=' + encodeURIComponent(url));
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    recipes.unshift({ ...data, id: Date.now().toString(36) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error);
+    recipes.unshift({
+      id: Date.now().toString(36), title: d.title, servings: d.servings, time: d.time, source: d.source,
+      ing: (d.ingredientGroups || [{ title: '', items: d.ingredients || [] }]).map(g => ({ title: g.title, items: g.items.map(t => ({ t, have: false })) })),
+      meth: d.methodGroups || [{ title: '', items: d.steps || [] }]
+    });
     save(); msg = 'Saved ✓';
   } catch (e) { msg = e.message || 'Could not read that link.'; }
   busy = false; render();
