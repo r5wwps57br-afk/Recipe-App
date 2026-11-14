@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Recipe Book</title>
+<style>
+:root{--bg:#faf7f2;--card:#fff;--ink:#2b2622;--mute:#7a7068;--accent:#c4562a;--line:#e8e0d6}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1917;--card:#292524;--ink:#f3ede6;--mute:#a39a91;--accent:#ee8a5e;--line:#3d3733}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Georgia,serif}
+main{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:1.8rem;margin:0 0 12px}
+input,button{font:inherit;font-family:system-ui,sans-serif}
+input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:11px 16px;cursor:pointer}
+button.ghost{background:none;color:var(--accent);border:1px solid var(--line)}
+.row{display:flex;gap:8px;margin:8px 0}
+.list{display:grid;gap:10px;margin-top:14px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;cursor:pointer}
+.meta,.msg{color:var(--mute);font-family:system-ui,sans-serif;font-size:.85rem}
+.recipe h2{font-size:1.7rem;margin:10px 0 4px}
+.recipe h3{font-family:system-ui,sans-serif;text-transform:uppercase;letter-spacing:.08em;font-size:.8rem;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:4px;margin:22px 0 8px}
+.recipe li{margin:6px 0}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main><div id="app"></div></main>
+<script>
+const KEY = 'recipes-v1';
+let recipes = [], view = null, msg = '', busy = false;
+try { recipes = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) {}
+const save = () => localStorage.setItem(KEY, JSON.stringify(recipes));
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const app = document.getElementById('app');
+
+function render() {
+  const r = recipes.find(x => x.id === view);
+  if (r) {
+    app.innerHTML = `<div class="recipe"><button class="ghost" onclick="go(null)">← All recipes</button>
+      <h2>${esc(r.title)}</h2>
+      <div class="meta">${[r.servings && 'Serves ' + esc(r.servings), esc(r.time)].filter(Boolean).join(' · ')}</div>
+      <h3>Ingredients</h3><ul>${r.ingredients.map(i => `<li>${esc(i)}</li>`).join('')}</ul>
+      <h3>Method</h3><ol>${r.steps.map(i => `<li>${esc(i)}</li>`).join('')}</ol>
+      <div class="row"><a href="${esc(r.source)}" target="_blank" rel="noopener">Original source</a>
+      <button class="ghost" style="margin-left:auto" onclick="del('${r.id}')">Delete</button></div></div>`;
+    return;
+  }
+  app.innerHTML = `<h1>🍳 My Recipe Book</h1>
+    <div class="row"><input id="link" type="url" placeholder="Paste a recipe link…"><button id="btn" onclick="add()">${busy ? 'Saving…' : 'Save'}</button></div>
+    <div class="msg">${esc(msg)}</div>
+    <input id="q" placeholder="Search saved recipes…" oninput="list()" style="margin-top:12px">
+    <div class="list" id="list"></div>`;
+  list();
+}
+function list() {
+  const q = (document.getElementById('q').value || '').toLowerCase();
+  const l = recipes.filter(r => (r.title + r.ingredients.join(' ')).toLowerCase().includes(q));
+  document.getElementById('list').innerHTML = l.length ? l.map(r =>
+    `<div class="item" onclick="go('${r.id}')"><b>${esc(r.title)}</b>
+     <div class="meta">${[esc(r.time), r.servings && 'Serves ' + esc(r.servings)].filter(Boolean).join(' · ')}</div></div>`).join('')
+    : '<div class="meta" style="text-align:center;padding:24px">No recipes yet. Paste a link above.</div>';
+}
+function go(id) { view = id; render(); scrollTo(0, 0); }
+function del(id) { if (confirm('Delete this recipe?')) { recipes = recipes.filter(r => r.id !== id); save(); go(null); } }
+async function add() {
+  const url = document.getElementById('link').value.trim();
+  if (!url || busy) return;
+  busy = true; msg = 'Reading recipe…'; render();
+  try {
+    const res = await fetch('/.netlify/functions/parse?url=' + encodeURIComponent(url));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    recipes.unshift({ ...data, id: Date.now().toString(36) });
+    save(); msg = 'Saved ✓';
+  } catch (e) { msg = e.message || 'Could not read that link.'; }
+  busy = false; render();
+}
+render();
+</script>
+</body>
+</html>
