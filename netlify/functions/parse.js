@@ -20,6 +20,40 @@ const steps = ins => {
     i.text ? [dec(i.text)] : i.name ? [dec(i.name)] : []).filter(Boolean);
 };
 
+const stepGroups = ins => {
+  const out = []; let loose = [];
+  const flush = () => { if (loose.length) out.push({ title: '', items: loose }); loose = []; };
+  for (const i of [].concat(ins || [])) {
+    if (i && typeof i === 'object' && i.itemListElement) {
+      flush();
+      out.push({ title: dec(i.name), items: steps(i.itemListElement) });
+    } else loose.push(...steps(i));
+  }
+  flush();
+  return out.filter(g => g.items.length);
+};
+
+const htmlGroups = (html, expected) => {
+  const m = /class=["'][^"']*(wprm-recipe-ingredients-container|tasty-recipes-ingredients|mv-create-ingredients)/i.exec(html);
+  if (!m) return null;
+  const rest = html.slice(m.index, m.index + 60000);
+  const end = rest.search(/wprm-recipe-instructions-container|tasty-recipes-instructions|mv-create-instructions/i);
+  const chunk = end > 0 ? rest.slice(0, end) : rest.slice(0, 20000);
+  const groups = []; let title = '';
+  const re = /<(h[2-5])[^>]*>([\s\S]*?)<\/\1>|<ul[^>]*>([\s\S]*?)<\/ul>/gi;
+  let t;
+  while ((t = re.exec(chunk))) {
+    if (t[1]) { title = dec(t[2]); if (/^ingredients?$/i.test(title)) title = ''; }
+    else {
+      const items = [...t[3].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)].map(x => dec(x[1])).filter(Boolean);
+      if (items.length) { groups.push({ title, items }); title = ''; }
+    }
+  }
+  const total = groups.reduce((n, g) => n + g.items.length, 0);
+  if (!total || (expected && (total < expected * 0.7 || total > expected * 1.3))) return null;
+  return groups;
+};
+
 const findRecipe = n => {
   if (!n || typeof n !== 'object') return null;
   if (Array.isArray(n)) { for (const x of n) { const r = findRecipe(x); if (r) return r; } return null; }
@@ -50,13 +84,14 @@ exports.handler = async event => {
     }
     if (!recipe) return json(404, { error: "Couldn't find a recipe on that page." });
 
+    const flat = [].concat(recipe.recipeIngredient || []).map(dec).filter(Boolean);
     const yieldVal = [].concat(recipe.recipeYield || [])[0];
     return json(200, {
       title: dec(recipe.name) || 'Untitled recipe',
       servings: dec(yieldVal),
       time: dur(recipe.totalTime) || dur(recipe.cookTime) || dur(recipe.prepTime),
-      ingredients: [].concat(recipe.recipeIngredient || []).map(dec).filter(Boolean),
-      steps: steps(recipe.recipeInstructions),
+      ingredientGroups: htmlGroups(html, flat.length) || [{ title: '', items: flat }],
+      methodGroups: stepGroups(recipe.recipeInstructions),
       source: url.href
     });
   } catch (e) {
